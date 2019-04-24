@@ -1,7 +1,7 @@
 35C3 Nokia phone challenge
 ==========================
 
-This repository contains all the source code, infrastructure code and exploits for the 35C3 challenges called `newphonewhodis` and `identitytheft`
+This repository contains all the source code, infrastructure code and exploits for the 35C3 challenges called `newphonewhodis` and `identitytheft`. It's the code [behind the stuff I'm showing in this tweet](https://twitter.com/G33KatWork/status/1078580869844140032).
 
 This includes:
 
