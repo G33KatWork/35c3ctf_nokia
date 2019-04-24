@@ -1,0 +1,924 @@
+diff --git a/default-configs/arm-softmmu.mak b/default-configs/arm-softmmu.mak
+index 834d45cfaf..50c05b60b7 100644
+--- a/default-configs/arm-softmmu.mak
++++ b/default-configs/arm-softmmu.mak
+@@ -24,6 +24,7 @@ CONFIG_SSD0303=y
+ CONFIG_SSD0323=y
+ CONFIG_DDC=y
+ CONFIG_SII9022=y
++CONFIG_PCD8544=y
+ CONFIG_ADS7846=y
+ CONFIG_MAX111X=y
+ CONFIG_SSI=y
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 281ddcdf6e..0cbcd008b4 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -59,6 +59,7 @@
+ #include "qapi/visitor.h"
+ #include "standard-headers/linux/input.h"
+ #include "hw/arm/smmuv3.h"
++#include "hw/ssi/ssi.h"
+ 
+ #define DEFINE_VIRT_MACHINE_LATEST(major, minor, latest) \
+     static void virt_##major##_##minor##_class_init(ObjectClass *oc, \
+@@ -136,6 +137,10 @@ static const MemMapEntry a15memmap[] = {
+     /* This redistributor space allows up to 2*64kB*123 CPUs */
+     [VIRT_GIC_REDIST] =         { 0x080A0000, 0x00F60000 },
+     [VIRT_UART] =               { 0x09000000, 0x00001000 },
++    [VIRT_AUDIO] =              { 0x09001000, 0x00001000 },
++    [VIRT_SPI] =                { 0x09002000, 0x00001000 },
++    [VIRT_DISPLAY_GPIO] =       { 0x09003000, 0x00001000 },
++    [VIRT_KEYBOARD] =           { 0x09004000, 0x00001000 },
+     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
+     [VIRT_FW_CFG] =             { 0x09020000, 0x00000018 },
+     [VIRT_GPIO] =               { 0x09030000, 0x00001000 },
+@@ -162,6 +167,10 @@ static const int a15irqmap[] = {
+     [VIRT_PCIE] = 3, /* ... to 6 */
+     [VIRT_GPIO] = 7,
+     [VIRT_SECURE_UART] = 8,
++    [VIRT_AUDIO] = 11,
++    [VIRT_SPI] = 12,
++    [VIRT_DISPLAY_GPIO] = 13,
++    [VIRT_KEYBOARD] = 14,
+     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
+     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
+@@ -683,6 +692,152 @@ static void create_uart(const VirtMachineState *vms, qemu_irq *pic, int uart,
+     g_free(nodename);
+ }
+ 
++/*static void create_audio(const VirtBoardInfo *vms, qemu_irq *pic)
++{
++    DeviceState *dev;
++    char *nodename;
++    hwaddr base = vms->memmap[VIRT_AUDIO].base;
++    hwaddr size = vms->memmap[VIRT_AUDIO].size;
++    int irq = vms->irqmap[VIRT_AUDIO];
++    const char compat[] = "arm,pl041\0arm,primecell";
++
++    dev = qdev_create(NULL, "pl041");
++    qdev_prop_set_uint32(dev, "nc_fifo_depth", 512);
++    qdev_init_nofail(dev);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
++    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic[irq]);
++
++    nodename = g_strdup_printf("/aaci@%" PRIx64, base);
++    qemu_fdt_add_subnode(vms->fdt, nodename);
++    // Note that we can't use setprop_string because of the embedded NUL
++    qemu_fdt_setprop(vms->fdt, nodename, "compatible",
++                         compat, sizeof(compat));
++    qemu_fdt_setprop_sized_cells(vms->fdt, nodename, "reg",
++                                     2, base, 2, size);
++    qemu_fdt_setprop_cells(vms->fdt, nodename, "interrupts",
++                               GIC_FDT_IRQ_TYPE_SPI, irq,
++                               GIC_FDT_IRQ_FLAGS_LEVEL_HI);
++    qemu_fdt_setprop_cell(vms->fdt, nodename, "clocks", vms->clock_phandle);
++    qemu_fdt_setprop_string(vms->fdt, nodename, "clock-names", "apb_pclk");
++    g_free(nodename);
++}*/
++
++static void create_display(const VirtMachineState *vms, qemu_irq *pic)
++{
++    char *nodename_gpio;
++    DeviceState *dev_gpio;
++    hwaddr base_gpio = vms->memmap[VIRT_DISPLAY_GPIO].base;
++    hwaddr size_gpio = vms->memmap[VIRT_DISPLAY_GPIO].size;
++    int irq_gpio = vms->irqmap[VIRT_DISPLAY_GPIO];
++    const char compat_gpio[] = "arm,pl061\0arm,primecell";
++
++    DeviceState *dev_spi;
++    char *nodename_spi;
++    hwaddr base_spi = vms->memmap[VIRT_SPI].base;
++    hwaddr size_spi = vms->memmap[VIRT_SPI].size;
++    int irq_spi = vms->irqmap[VIRT_SPI];
++    const char compat_spi[] = "arm,pl022\0arm,primecell";
++
++    void* spibus;
++    DeviceState *displaydev;
++    qemu_irq display_cs;
++    qemu_irq display_cd;
++    char *nodename_display;
++    const char compat_display[] = "philips,pdc8544";
++
++
++    /**** Create GPIO device ****/
++    dev_gpio = sysbus_create_simple("pl061", base_gpio, pic[irq_gpio]);
++
++    uint32_t phandle_gpio = qemu_fdt_alloc_phandle(vms->fdt);
++    nodename_gpio = g_strdup_printf("/pl061@%" PRIx64, base_gpio);
++    qemu_fdt_add_subnode(vms->fdt, nodename_gpio);
++    qemu_fdt_setprop_sized_cells(vms->fdt, nodename_gpio, "reg",
++                                 2, base_gpio, 2, size_gpio);
++    qemu_fdt_setprop(vms->fdt, nodename_gpio, "compatible", compat_gpio, sizeof(compat_gpio));
++    qemu_fdt_setprop_cell(vms->fdt, nodename_gpio, "#gpio-cells", 2);
++    qemu_fdt_setprop(vms->fdt, nodename_gpio, "gpio-controller", NULL, 0);
++    qemu_fdt_setprop_cells(vms->fdt, nodename_gpio, "interrupts",
++                           GIC_FDT_IRQ_TYPE_SPI, irq_gpio,
++                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
++    qemu_fdt_setprop_cell(vms->fdt, nodename_gpio, "clocks", vms->clock_phandle);
++    qemu_fdt_setprop_string(vms->fdt, nodename_gpio, "clock-names", "apb_pclk");
++    qemu_fdt_setprop_cell(vms->fdt, nodename_gpio, "phandle", phandle_gpio);
++
++
++    /**** Create SPI device ****/
++    dev_spi = sysbus_create_simple("pl022", base_spi, pic[irq_spi]);
++
++    nodename_spi = g_strdup_printf("/pl022@%" PRIx64, base_spi);
++    qemu_fdt_add_subnode(vms->fdt, nodename_spi);
++    /* Note that we can't use setprop_string because of the embedded NUL */
++    qemu_fdt_setprop(vms->fdt, nodename_spi, "compatible",
++                         compat_spi, sizeof(compat_spi));
++    qemu_fdt_setprop_cell(vms->fdt, nodename_spi, "#address-cells", 1);
++    qemu_fdt_setprop_sized_cells(vms->fdt, nodename_spi, "reg",
++                                     2, base_spi, 2, size_spi);
++    qemu_fdt_setprop_cells(vms->fdt, nodename_spi, "interrupts",
++                               GIC_FDT_IRQ_TYPE_SPI, irq_spi,
++                               GIC_FDT_IRQ_FLAGS_LEVEL_HI);
++    qemu_fdt_setprop_cell(vms->fdt, nodename_spi, "clocks", vms->clock_phandle);
++    qemu_fdt_setprop_string(vms->fdt, nodename_spi, "clock-names", "apb_pclk");
++    qemu_fdt_setprop_cell(vms->fdt, nodename_spi, "num-cs", 1);
++    qemu_fdt_setprop_cells(vms->fdt, nodename_spi, "cs-gpios", phandle_gpio, 0, 0);
++
++
++    /**** Create Display ****/
++    spibus = qdev_get_child_bus(dev_spi, "ssi");
++
++    displaydev = ssi_create_slave(spibus, "pcd8544");
++
++    display_cs = qdev_get_gpio_in_named(displaydev, SSI_GPIO_CS, 0);
++    display_cd = qdev_get_gpio_in(displaydev, 0);
++
++    qdev_connect_gpio_out(dev_gpio, 0, display_cs);
++    qdev_connect_gpio_out(dev_gpio, 1, display_cd);
++
++    nodename_display = g_strdup_printf("%s/pcd8544@0", nodename_spi);
++    qemu_fdt_add_subnode(vms->fdt, nodename_display);
++    qemu_fdt_setprop(vms->fdt, nodename_display, "compatible",
++                         compat_display, sizeof(compat_display));
++    qemu_fdt_setprop_cell(vms->fdt, nodename_display, "reg", 0);
++    qemu_fdt_setprop_cell(vms->fdt, nodename_display, "spi-max-frequency", 400000);
++    qemu_fdt_setprop_cell(vms->fdt, nodename_display, "rotate", 0);
++    qemu_fdt_setprop_cell(vms->fdt, nodename_display, "buswidth", 8);
++    qemu_fdt_setprop_cells(vms->fdt, nodename_display, "dc-gpios", phandle_gpio, 1, 0);
++
++    /* Cleanup */
++    g_free(nodename_gpio);
++    g_free(nodename_spi);
++    g_free(nodename_display);
++}
++
++static void create_keyboard(const VirtMachineState *vms, qemu_irq *pic)
++{
++    char *nodename;
++    const char clocknames[] = "KMIREFCLK\0apb_pclk";
++    hwaddr base = vms->memmap[VIRT_KEYBOARD].base;
++    hwaddr size = vms->memmap[VIRT_KEYBOARD].size;
++    int irq = vms->irqmap[VIRT_KEYBOARD];
++    const char compat[] = "arm,pl050\0arm,primecell";
++
++    sysbus_create_simple("pl050_keyboard", base, pic[irq]);
++
++    nodename = g_strdup_printf("/pl050@%" PRIx64, base);
++    qemu_fdt_add_subnode(vms->fdt, nodename);
++    qemu_fdt_setprop(vms->fdt, nodename, "compatible", compat, sizeof(compat));
++    qemu_fdt_setprop_sized_cells(vms->fdt, nodename, "reg",
++                                 2, base, 2, size);
++    qemu_fdt_setprop_cells(vms->fdt, nodename, "interrupts",
++                           GIC_FDT_IRQ_TYPE_SPI, irq,
++                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
++    qemu_fdt_setprop_cells(vms->fdt, nodename, "clocks",
++                            vms->clock_phandle, vms->clock_phandle);
++    qemu_fdt_setprop(vms->fdt, nodename, "clock-names",
++                         clocknames, sizeof(clocknames));
++    g_free(nodename);
++}
++
+ static void create_rtc(const VirtMachineState *vms, qemu_irq *pic)
+ {
+     char *nodename;
+@@ -1508,6 +1663,10 @@ static void machvirt_init(MachineState *machine)
+ 
+     create_rtc(vms, pic);
+ 
++    //create_audio(vms, pic);
++    create_display(vms, pic);
++    create_keyboard(vms, pic);
++
+     create_pcie(vms, pic);
+ 
+     create_gpio(vms, pic);
+diff --git a/hw/display/Makefile.objs b/hw/display/Makefile.objs
+index fb8408c6d0..a420cda3b6 100644
+--- a/hw/display/Makefile.objs
++++ b/hw/display/Makefile.objs
+@@ -10,6 +10,7 @@ common-obj-$(CONFIG_SII9022) += sii9022.o
+ common-obj-$(CONFIG_SSD0303) += ssd0303.o
+ common-obj-$(CONFIG_SSD0323) += ssd0323.o
+ common-obj-$(CONFIG_XEN) += xenfb.o
++common-obj-$(CONFIG_PCD8544) += pcd8544.o
+ 
+ common-obj-$(CONFIG_VGA_PCI) += vga-pci.o
+ common-obj-$(CONFIG_VGA_PCI) += bochs-display.o
+diff --git a/hw/display/pcd8544.c b/hw/display/pcd8544.c
+new file mode 100644
+index 0000000000..52f5b72879
+--- /dev/null
++++ b/hw/display/pcd8544.c
+@@ -0,0 +1,260 @@
++/*
++ * PCD8544 LCD controller with 84x48 pixel display.
++ *
++ * Copyright (c) 2016 Andreas Galauner <andreas@galauner.de>
++ * Based on the SSD0323 driver in qemu by Paul Brook
++ *
++ * This code is licensed under the GPL.
++ */
++
++#include "qemu/osdep.h"
++#include "hw/ssi/ssi.h"
++#include "ui/console.h"
++
++//#define DEBUG_PCD8544 1
++
++#ifdef DEBUG_PCD8544
++#define DPRINTF(fmt, ...) \
++do { printf("pcd8544: " fmt , ## __VA_ARGS__); } while (0)
++#define BADF(fmt, ...) \
++do { \
++    fprintf(stderr, "pcd8544: error: " fmt , ## __VA_ARGS__); abort(); \
++} while (0)
++#else
++#define DPRINTF(fmt, ...) do {} while(0)
++#define BADF(fmt, ...) \
++do { fprintf(stderr, "pcd8544: error: " fmt , ## __VA_ARGS__);} while (0)
++#endif
++
++/* Scaling factor for pixels.  */
++#define MAGNIFY 8
++
++enum pcd8544_mode
++{
++    PCD8544_CMD,
++    PCD8544_DATA
++};
++
++enum pcd8544_displaymode
++{
++    PCD8544_BLANK = 0,
++    PCD8544_ALLON = 1,
++    PCD8544_NORMAL = 2,
++    PCD8544_INVERSE = 3
++};
++
++typedef struct {
++    SSISlave ssidev;
++    QemuConsole *con;
++
++    int32_t display_mode;
++    int32_t extended;
++    int32_t yaddress;
++    int32_t xaddress;
++    int32_t redraw;
++    int32_t vertical_addressing;
++    uint32_t mode;
++    uint8_t framebuffer[84 * 48 / 8];
++} pcd8544_state;
++
++static uint32_t pcd8544_transfer(SSISlave *dev, uint32_t data)
++{
++    pcd8544_state *s = FROM_SSI_SLAVE(pcd8544_state, dev);
++
++    switch (s->mode) {
++        case PCD8544_DATA:
++            DPRINTF("data 0x%08x\n", data);
++            s->framebuffer[s->yaddress * 84 + s->xaddress] = data & 0xFF;
++            s->redraw = 1;
++
++            if (s->vertical_addressing == 0) {
++                s->xaddress++;
++                if (s->xaddress > 83) {
++                    s->yaddress++;
++                    s->xaddress = 0;
++                }
++                if (s->yaddress > 5) {
++                    s->yaddress = 0;
++                }
++            } else {
++                s->yaddress++;
++                if (s->yaddress > 5) {
++                    s->xaddress++;
++                    s->yaddress = 0;
++                }
++                if (s->xaddress > 83) {
++                    s->xaddress = 0;
++                }
++            }
++            break;
++        case PCD8544_CMD:
++            //DPRINTF("cmd 0x%02x\n", data);
++
++            if((data & 0xF8) == 0x20) {             //Function set
++                s->extended = data & 1;
++                s->vertical_addressing = data & 2;
++                DPRINTF("extended %x\n", s->extended);
++            } else {
++                if(!s->extended) {
++                    if((data & 0xFA) == 0x08) {     //Display control
++                        s->display_mode = ((data & 4) >> 1) | (data & 1);
++                        DPRINTF("display mode %x\n", s->display_mode);
++                    } else if((data & 0xF8) == 0x40) {  //Set Y-address
++                        DPRINTF("yaddress: %d\n", data & 0x07);
++                        s->yaddress = data & 0x07;
++                    } else if((data & 0x80) == 0x80) {  //Set X-address
++                        DPRINTF("xaddress: %d\n", data & 0x7F);
++                        s->xaddress = data & 0x7F;
++                    }
++                }
++                //We don't need the extended commands in simulation
++            }
++
++            break;
++    }
++    return 0;
++}
++
++static void pcd8544_update_display(void *opaque)
++{
++    pcd8544_state *s = (pcd8544_state *)opaque;
++    DisplaySurface *surface = qemu_console_surface(s->con);
++    uint8_t *dest;
++    int dest_width;
++    int x, y;
++    uint8_t page_address;
++    uint8_t pixel;
++    int i;
++
++    if (!s->redraw)
++        return;
++
++    switch (surface_bits_per_pixel(surface)) {
++        case 0:
++            return;
++        case 15:
++            dest_width = 2;
++            break;
++        case 16:
++            dest_width = 2;
++            break;
++        case 24:
++            dest_width = 3;
++            break;
++        case 32:
++            dest_width = 4;
++            break;
++        default:
++            BADF("Bad color depth\n");
++            return;
++    }
++
++    dest = surface_data(surface);
++    for(y = 0; y < 48; y++)
++    {
++        page_address = y / 8;
++
++        for(x = 0; x < 84; x++)
++        {
++            pixel = (s->framebuffer[page_address * 84 + x] >> (y % 8)) & 1;
++
++            switch (s->display_mode) {
++                case PCD8544_BLANK:
++                    pixel = 0;
++                    break;
++
++                case PCD8544_ALLON:
++                    pixel = 1;
++                    break;
++
++                case PCD8544_NORMAL:
++                    break;
++
++                case PCD8544_INVERSE:
++                    pixel = !pixel;
++                    break;
++            }
++
++            if(pixel)
++            {
++                for (i = 0; i < MAGNIFY; i++) 
++                {
++                    memset(dest, 0x00, dest_width);
++                    dest += dest_width;
++                }
++            }
++            else
++            {
++                for (i = 0; i < MAGNIFY; i++) 
++                {
++                    memset(dest, 0xFF, dest_width);
++                    dest += dest_width;
++                }
++            }
++        }
++
++        for (i = 1; i < MAGNIFY; i++)
++        {
++            memcpy(dest, dest - dest_width * MAGNIFY * 84, dest_width * 84 * MAGNIFY);
++            dest += dest_width * 84 * MAGNIFY;
++        }
++    }
++
++    s->redraw = 0;
++    dpy_gfx_update(s->con, 0, 0, 84 * MAGNIFY, 48 * MAGNIFY);
++}
++
++static void pcd8544_invalidate_display(void * opaque)
++{
++    pcd8544_state *s = (pcd8544_state *)opaque;
++    s->redraw = 1;
++}
++
++/* Command/data input.  */
++static void pcd8544_cd(void *opaque, int n, int level)
++{
++    pcd8544_state *s = (pcd8544_state *)opaque;
++    DPRINTF("%s mode\n", level ? "Data" : "Command");
++    s->mode = level ? PCD8544_DATA : PCD8544_CMD;
++}
++
++static const GraphicHwOps pcd8544_ops = {
++    .invalidate  = pcd8544_invalidate_display,
++    .gfx_update  = pcd8544_update_display,
++};
++
++static void pcd8544_realize(SSISlave *d, Error **errp)
++{
++    DeviceState *dev = DEVICE(d);
++    pcd8544_state *s = FROM_SSI_SLAVE(pcd8544_state, d);
++
++    s->xaddress = 0;
++    s->yaddress = 0;
++    s->con = graphic_console_init(dev, 0, &pcd8544_ops, s);
++    qemu_console_resize(s->con, 84 * MAGNIFY, 48 * MAGNIFY);
++
++    qdev_init_gpio_in(dev, pcd8544_cd, 1);
++}
++
++static void pcd8544_class_init(ObjectClass *klass, void *data)
++{
++    SSISlaveClass *k = SSI_SLAVE_CLASS(klass);
++
++    k->realize = pcd8544_realize;
++    k->transfer = pcd8544_transfer;
++    k->cs_polarity = SSI_CS_LOW;
++}
++
++static const TypeInfo pcd8544_info = {
++    .name          = "pcd8544",
++    .parent        = TYPE_SSI_SLAVE,
++    .instance_size = sizeof(pcd8544_state),
++    .class_init    = pcd8544_class_init,
++};
++
++static void pcd8544_register_types(void)
++{
++    type_register_static(&pcd8544_info);
++}
++
++type_init(pcd8544_register_types)
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index 9a870ccb6a..ecd7fed929 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -65,7 +65,11 @@ enum {
+     VIRT_GIC_REDIST2,
+     VIRT_SMMU,
+     VIRT_UART,
++    VIRT_AUDIO,
+     VIRT_MMIO,
++    VIRT_SPI,
++    VIRT_DISPLAY_GPIO,
++    VIRT_KEYBOARD,
+     VIRT_RTC,
+     VIRT_FW_CFG,
+     VIRT_PCIE,
+diff --git a/target/arm/arm-semi.c b/target/arm/arm-semi.c
+index 7cac8734c7..771cc72a0e 100644
+--- a/target/arm/arm-semi.c
++++ b/target/arm/arm-semi.c
+@@ -71,21 +71,6 @@
+ #define GDB_O_TRUNC   0x400
+ #define GDB_O_BINARY  0
+ 
+-static int gdb_open_modeflags[12] = {
+-    GDB_O_RDONLY,
+-    GDB_O_RDONLY | GDB_O_BINARY,
+-    GDB_O_RDWR,
+-    GDB_O_RDWR | GDB_O_BINARY,
+-    GDB_O_WRONLY | GDB_O_CREAT | GDB_O_TRUNC,
+-    GDB_O_WRONLY | GDB_O_CREAT | GDB_O_TRUNC | GDB_O_BINARY,
+-    GDB_O_RDWR | GDB_O_CREAT | GDB_O_TRUNC,
+-    GDB_O_RDWR | GDB_O_CREAT | GDB_O_TRUNC | GDB_O_BINARY,
+-    GDB_O_WRONLY | GDB_O_CREAT | GDB_O_APPEND,
+-    GDB_O_WRONLY | GDB_O_CREAT | GDB_O_APPEND | GDB_O_BINARY,
+-    GDB_O_RDWR | GDB_O_CREAT | GDB_O_APPEND,
+-    GDB_O_RDWR | GDB_O_CREAT | GDB_O_APPEND | GDB_O_BINARY
+-};
+-
+ static int open_modeflags[12] = {
+     O_RDONLY,
+     O_RDONLY | O_BINARY,
+@@ -240,12 +225,17 @@ static target_ulong arm_gdb_syscall(ARMCPU *cpu, gdb_syscall_complete_cb cb,
+      put_user_u64(val, args + (n) * 8) :                \
+      put_user_u32(val, args + (n) * 4))
+ 
++static int zImageLoaded = 0;
++static int headerLoaded = 0;
++static int pagerLoaded = 0;
++static int pageableLoaded = 0;
++
+ target_ulong do_arm_semihosting(CPUARMState *env)
+ {
+     ARMCPU *cpu = arm_env_get_cpu(env);
+     CPUState *cs = CPU(cpu);
+     target_ulong args;
+-    target_ulong arg0, arg1, arg2, arg3;
++    target_ulong arg0, arg1, arg2;//, arg3;
+     char * s;
+     int nr;
+     uint32_t ret;
+@@ -279,74 +269,37 @@ target_ulong do_arm_semihosting(CPUARMState *env)
+             unlock_user(s, arg0, 0);
+             return (uint32_t)-1;
+         }
+-        if (strcmp(s, ":tt") == 0) {
+-            int result_fileno = arg1 < 4 ? STDIN_FILENO : STDOUT_FILENO;
+-            unlock_user(s, arg0, 0);
+-            return result_fileno;
+-        }
+         if (use_gdb_syscalls()) {
+-            ret = arm_gdb_syscall(cpu, arm_semi_cb, "open,%s,%x,1a4", arg0,
+-                                  (int)arg2+1, gdb_open_modeflags[arg1]);
++            ret = -1;
+         } else {
+-            ret = set_swi_errno(ts, open(s, open_modeflags[arg1], 0644));
++            if((strcmp(s, "zImage") == 0 && !zImageLoaded)) {
++                zImageLoaded = true;
++                ret = set_swi_errno(ts, open(s, open_modeflags[arg1], 0644));
++            }
++            else if(strcmp(s, "tee-header_v2.bin") == 0 && !headerLoaded) {
++                headerLoaded = true;
++                ret = set_swi_errno(ts, open(s, open_modeflags[arg1], 0644));
++            }
++            else if(strcmp(s, "tee-pager_v2.bin") == 0 && !pagerLoaded) {
++                pagerLoaded = true;
++                ret = set_swi_errno(ts, open(s, open_modeflags[arg1], 0644));
++            }
++            else if(strcmp(s, "tee-pageable_v2.bin") == 0 && !pageableLoaded) {
++                pageableLoaded = true;
++                ret = set_swi_errno(ts, open(s, open_modeflags[arg1], 0644));
++            }
++            else
++                ret = -1;
+         }
+         unlock_user(s, arg0, 0);
+         return ret;
+     case TARGET_SYS_CLOSE:
+         GET_ARG(0);
+         if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "close,%x", arg0);
++            return -1;
+         } else {
+             return set_swi_errno(ts, close(arg0));
+         }
+-    case TARGET_SYS_WRITEC:
+-        {
+-          char c;
+-
+-          if (get_user_u8(c, args))
+-              /* FIXME - should this error code be -TARGET_EFAULT ? */
+-              return (uint32_t)-1;
+-          /* Write to debug console.  stderr is near enough.  */
+-          if (use_gdb_syscalls()) {
+-                return arm_gdb_syscall(cpu, arm_semi_cb, "write,2,%x,1", args);
+-          } else {
+-                return write(STDERR_FILENO, &c, 1);
+-          }
+-        }
+-    case TARGET_SYS_WRITE0:
+-        if (!(s = lock_user_string(args)))
+-            /* FIXME - should this error code be -TARGET_EFAULT ? */
+-            return (uint32_t)-1;
+-        len = strlen(s);
+-        if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "write,2,%x,%x",
+-                                   args, len);
+-        } else {
+-            ret = write(STDERR_FILENO, s, len);
+-        }
+-        unlock_user(s, args, 0);
+-        return ret;
+-    case TARGET_SYS_WRITE:
+-        GET_ARG(0);
+-        GET_ARG(1);
+-        GET_ARG(2);
+-        len = arg2;
+-        if (use_gdb_syscalls()) {
+-            arm_semi_syscall_len = len;
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "write,%x,%x,%x",
+-                                   arg0, arg1, len);
+-        } else {
+-            s = lock_user(VERIFY_READ, arg1, len, 1);
+-            if (!s) {
+-                /* FIXME - should this error code be -TARGET_EFAULT ? */
+-                return (uint32_t)-1;
+-            }
+-            ret = set_swi_errno(ts, write(arg0, s, len));
+-            unlock_user(s, arg1, 0);
+-            if (ret == (uint32_t)-1)
+-                return -1;
+-            return len - ret;
+-        }
+     case TARGET_SYS_READ:
+         GET_ARG(0);
+         GET_ARG(1);
+@@ -370,28 +323,6 @@ target_ulong do_arm_semihosting(CPUARMState *env)
+                 return -1;
+             return len - ret;
+         }
+-    case TARGET_SYS_READC:
+-       /* XXX: Read from debug console. Not implemented.  */
+-        return 0;
+-    case TARGET_SYS_ISTTY:
+-        GET_ARG(0);
+-        if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "isatty,%x", arg0);
+-        } else {
+-            return isatty(arg0);
+-        }
+-    case TARGET_SYS_SEEK:
+-        GET_ARG(0);
+-        GET_ARG(1);
+-        if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "lseek,%x,%x,0",
+-                                   arg0, arg1);
+-        } else {
+-            ret = set_swi_errno(ts, lseek(arg0, arg1, SEEK_SET));
+-            if (ret == (uint32_t)-1)
+-              return -1;
+-            return 0;
+-        }
+     case TARGET_SYS_FLEN:
+         GET_ARG(0);
+         if (use_gdb_syscalls()) {
+@@ -404,250 +335,6 @@ target_ulong do_arm_semihosting(CPUARMState *env)
+                 return -1;
+             return buf.st_size;
+         }
+-    case TARGET_SYS_TMPNAM:
+-        /* XXX: Not implemented.  */
+-        return -1;
+-    case TARGET_SYS_REMOVE:
+-        GET_ARG(0);
+-        GET_ARG(1);
+-        if (use_gdb_syscalls()) {
+-            ret = arm_gdb_syscall(cpu, arm_semi_cb, "unlink,%s",
+-                                  arg0, (int)arg1+1);
+-        } else {
+-            s = lock_user_string(arg0);
+-            if (!s) {
+-                /* FIXME - should this error code be -TARGET_EFAULT ? */
+-                return (uint32_t)-1;
+-            }
+-            ret =  set_swi_errno(ts, remove(s));
+-            unlock_user(s, arg0, 0);
+-        }
+-        return ret;
+-    case TARGET_SYS_RENAME:
+-        GET_ARG(0);
+-        GET_ARG(1);
+-        GET_ARG(2);
+-        GET_ARG(3);
+-        if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "rename,%s,%s",
+-                                   arg0, (int)arg1+1, arg2, (int)arg3+1);
+-        } else {
+-            char *s2;
+-            s = lock_user_string(arg0);
+-            s2 = lock_user_string(arg2);
+-            if (!s || !s2)
+-                /* FIXME - should this error code be -TARGET_EFAULT ? */
+-                ret = (uint32_t)-1;
+-            else
+-                ret = set_swi_errno(ts, rename(s, s2));
+-            if (s2)
+-                unlock_user(s2, arg2, 0);
+-            if (s)
+-                unlock_user(s, arg0, 0);
+-            return ret;
+-        }
+-    case TARGET_SYS_CLOCK:
+-        return clock() / (CLOCKS_PER_SEC / 100);
+-    case TARGET_SYS_TIME:
+-        return set_swi_errno(ts, time(NULL));
+-    case TARGET_SYS_SYSTEM:
+-        GET_ARG(0);
+-        GET_ARG(1);
+-        if (use_gdb_syscalls()) {
+-            return arm_gdb_syscall(cpu, arm_semi_cb, "system,%s",
+-                                   arg0, (int)arg1+1);
+-        } else {
+-            s = lock_user_string(arg0);
+-            if (!s) {
+-                /* FIXME - should this error code be -TARGET_EFAULT ? */
+-                return (uint32_t)-1;
+-            }
+-            ret = set_swi_errno(ts, system(s));
+-            unlock_user(s, arg0, 0);
+-            return ret;
+-        }
+-    case TARGET_SYS_ERRNO:
+-#ifdef CONFIG_USER_ONLY
+-        return ts->swi_errno;
+-#else
+-        return syscall_err;
+-#endif
+-    case TARGET_SYS_GET_CMDLINE:
+-        {
+-            /* Build a command-line from the original argv.
+-             *
+-             * The inputs are:
+-             *     * arg0, pointer to a buffer of at least the size
+-             *               specified in arg1.
+-             *     * arg1, size of the buffer pointed to by arg0 in
+-             *               bytes.
+-             *
+-             * The outputs are:
+-             *     * arg0, pointer to null-terminated string of the
+-             *               command line.
+-             *     * arg1, length of the string pointed to by arg0.
+-             */
+-
+-            char *output_buffer;
+-            size_t input_size;
+-            size_t output_size;
+-            int status = 0;
+-#if !defined(CONFIG_USER_ONLY)
+-            const char *cmdline;
+-#endif
+-            GET_ARG(0);
+-            GET_ARG(1);
+-            input_size = arg1;
+-            /* Compute the size of the output string.  */
+-#if !defined(CONFIG_USER_ONLY)
+-            cmdline = semihosting_get_cmdline();
+-            if (cmdline == NULL) {
+-                cmdline = ""; /* Default to an empty line. */
+-            }
+-            output_size = strlen(cmdline) + 1; /* Count terminating 0. */
+-#else
+-            unsigned int i;
+-
+-            output_size = ts->info->arg_end - ts->info->arg_start;
+-            if (!output_size) {
+-                /* We special-case the "empty command line" case (argc==0).
+-                   Just provide the terminating 0. */
+-                output_size = 1;
+-            }
+-#endif
+-
+-            if (output_size > input_size) {
+-                 /* Not enough space to store command-line arguments.  */
+-                return -1;
+-            }
+-
+-            /* Adjust the command-line length.  */
+-            if (SET_ARG(1, output_size - 1)) {
+-                /* Couldn't write back to argument block */
+-                return -1;
+-            }
+-
+-            /* Lock the buffer on the ARM side.  */
+-            output_buffer = lock_user(VERIFY_WRITE, arg0, output_size, 0);
+-            if (!output_buffer) {
+-                return -1;
+-            }
+-
+-            /* Copy the command-line arguments.  */
+-#if !defined(CONFIG_USER_ONLY)
+-            pstrcpy(output_buffer, output_size, cmdline);
+-#else
+-            if (output_size == 1) {
+-                /* Empty command-line.  */
+-                output_buffer[0] = '\0';
+-                goto out;
+-            }
+-
+-            if (copy_from_user(output_buffer, ts->info->arg_start,
+-                               output_size)) {
+-                status = -1;
+-                goto out;
+-            }
+-
+-            /* Separate arguments by white spaces.  */
+-            for (i = 0; i < output_size - 1; i++) {
+-                if (output_buffer[i] == 0) {
+-                    output_buffer[i] = ' ';
+-                }
+-            }
+-        out:
+-#endif
+-            /* Unlock the buffer on the ARM side.  */
+-            unlock_user(output_buffer, arg0, output_size);
+-
+-            return status;
+-        }
+-    case TARGET_SYS_HEAPINFO:
+-        {
+-            target_ulong retvals[4];
+-            target_ulong limit;
+-            int i;
+-
+-            GET_ARG(0);
+-
+-#ifdef CONFIG_USER_ONLY
+-            /* Some C libraries assume the heap immediately follows .bss, so
+-               allocate it using sbrk.  */
+-            if (!ts->heap_limit) {
+-                abi_ulong ret;
+-
+-                ts->heap_base = do_brk(0);
+-                limit = ts->heap_base + ARM_ANGEL_HEAP_SIZE;
+-                /* Try a big heap, and reduce the size if that fails.  */
+-                for (;;) {
+-                    ret = do_brk(limit);
+-                    if (ret >= limit) {
+-                        break;
+-                    }
+-                    limit = (ts->heap_base >> 1) + (limit >> 1);
+-                }
+-                ts->heap_limit = limit;
+-            }
+-
+-            retvals[0] = ts->heap_base;
+-            retvals[1] = ts->heap_limit;
+-            retvals[2] = ts->stack_base;
+-            retvals[3] = 0; /* Stack limit.  */
+-#else
+-            limit = ram_size;
+-            /* TODO: Make this use the limit of the loaded application.  */
+-            retvals[0] = limit / 2;
+-            retvals[1] = limit;
+-            retvals[2] = limit; /* Stack base */
+-            retvals[3] = 0; /* Stack limit.  */
+-#endif
+-
+-            for (i = 0; i < ARRAY_SIZE(retvals); i++) {
+-                bool fail;
+-
+-                if (is_a64(env)) {
+-                    fail = put_user_u64(retvals[i], arg0 + i * 8);
+-                } else {
+-                    fail = put_user_u32(retvals[i], arg0 + i * 4);
+-                }
+-
+-                if (fail) {
+-                    /* Couldn't write back to argument block */
+-                    return -1;
+-                }
+-            }
+-            return 0;
+-        }
+-    case TARGET_SYS_EXIT:
+-        if (is_a64(env)) {
+-            /* The A64 version of this call takes a parameter block,
+-             * so the application-exit type can return a subcode which
+-             * is the exit status code from the application.
+-             */
+-            GET_ARG(0);
+-            GET_ARG(1);
+-
+-            if (arg0 == ADP_Stopped_ApplicationExit) {
+-                ret = arg1;
+-            } else {
+-                ret = 1;
+-            }
+-        } else {
+-            /* ARM specifies only Stopped_ApplicationExit as normal
+-             * exit, everything else is considered an error */
+-            ret = (args == ADP_Stopped_ApplicationExit) ? 0 : 1;
+-        }
+-        gdb_exit(env, ret);
+-        exit(ret);
+-    case TARGET_SYS_SYNCCACHE:
+-        /* Clean the D-cache and invalidate the I-cache for the specified
+-         * virtual address range. This is a nop for us since we don't
+-         * implement caches. This is only present on A64.
+-         */
+-        if (is_a64(env)) {
+-            return 0;
+-        }
+-        /* fall through -- invalid for A32/T32 */
+     default:
+         fprintf(stderr, "qemu: Unsupported SemiHosting SWI 0x%02x\n", nr);
+         cpu_dump_state(cs, stderr, fprintf, 0);

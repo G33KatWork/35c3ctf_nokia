@@ -1,0 +1,13 @@
+#!/bin/sh
+
+#Desired image name
+IMAGE_NAME=nokia_buildenv
+
+
+#The following two variables are used by the run.sh-script.
+
+#Directory to mount into /project inside of the container
+PROJECTDIR=$PWD/..
+
+#The name of the created container
+CONTAINER=nokia_build

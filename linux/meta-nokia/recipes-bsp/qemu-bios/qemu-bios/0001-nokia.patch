@@ -1,0 +1,45 @@
+diff --git a/bios/link.mk b/bios/link.mk
+index 4b2fec1..c62ed98 100644
+--- a/bios/link.mk
++++ b/bios/link.mk
+@@ -16,7 +16,7 @@ link-ldadd  = $(LDADD)
+ link-ldadd += $(addprefix -L,$(libdirs))
+ link-ldadd += $(addprefix -l,$(libnames))
+ 
+-ldargs-bios.elf := $(link-ldflags) $(objs) $(link-ldadd) $(libgcc)
++ldargs-bios.elf := $(link-ldflags) $(objs) $(link-ldadd)
+ 
+ link-script-cppflags :=  \
+ 	$(filter-out $(CPPFLAGS_REMOVE) $(cppflags-remove), \
+diff --git a/bios/main.c b/bios/main.c
+index 9e446ed..a67739a 100644
+--- a/bios/main.c
++++ b/bios/main.c
+@@ -152,8 +152,12 @@ static void copy_ns_images(void)
+ 	rootfs_start = ROUNDUP(dst, PAGE_SIZE);
+ 	r = semihosting_download_file("rootfs.cpio.gz", 32 * 1024 * 1024,
+ 				      rootfs_start);
+-	CHECK(r < 0);
+-	rootfs_end = rootfs_start + r;
++	if(r < 0) {
++		msg("Failed to open rootfs.cpio.gz - assuming no initrd\n");
++		rootfs_end = rootfs_start = 0;
++	} else {
++		rootfs_end = rootfs_start + r;
++	}
+ }
+ 
+ #define OPTEE_MAGIC		0x4554504f
+diff --git a/bios/platform_config.h b/bios/platform_config.h
+index 1155430..7816dfd 100644
+--- a/bios/platform_config.h
++++ b/bios/platform_config.h
+@@ -52,7 +52,7 @@
+ 
+ #define CONSOLE_UART_BASE	UART0_BASE
+ 
+-#define DTB_MAX_SIZE		0x10000
++#define DTB_MAX_SIZE		0x100000
+ 
+ /* secure RAM is 16MByte but reserve the last 4MB to SDP memory pool */
+ #define TZ_RES_MEM_START	SECURE_RAM_START

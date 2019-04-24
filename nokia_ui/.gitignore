@@ -1,0 +1,8 @@
+ui/inc/generated/*.h
+ui/src/generated/*.c
+ui/nokia.db
+ui/nokia_ui
+baseband/baseband
+layer1/layer1
+sim/sim
+obj

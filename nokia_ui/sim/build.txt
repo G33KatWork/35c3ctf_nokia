@@ -1,0 +1,2 @@
+TZ build:
+make -f Makefile.ta TA_DEV_KIT_DIR=/usr/include/optee/export-user_ta OPTEE_CLIENT_EXPORT=/usr TEEC_EXPORT=/usr HOST_CROSS_COMPILE=arm-oe-linux-gnueabi- TA_CROSS_COMPILE=arm-oe-linux-gnueabi- CROSS_COMPILE=arm-oe-linux-gnueabi-

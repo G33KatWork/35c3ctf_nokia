@@ -1,0 +1,12 @@
+[Unit]
+Description=Phone Baseband
+After=layer1.service
+Requires=layer1.service
+
+[Service]
+Type=simple
+ExecStart=/opt/nokia/baseband
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

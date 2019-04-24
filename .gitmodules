@@ -1,0 +1,11 @@
+[submodule "linux/meta-openembedded"]
+	path = linux/meta-openembedded
+	url = git://git.openembedded.org/meta-openembedded
+	branch = thud
+[submodule "linux/poky"]
+	path = linux/poky
+	url = https://git.yoctoproject.org/git/poky
+	branch = thud
+[submodule "qemu/qemu"]
+	path = qemu/qemu
+	url = https://github.com/qemu/qemu.git

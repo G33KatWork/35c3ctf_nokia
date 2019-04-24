@@ -1,0 +1,161 @@
+diff -Naur SDL2-2.0.8/configure.in SDL2_patched/configure.in
+--- SDL2-2.0.8/configure.in	2018-03-01 17:34:41.000000000 +0100
++++ SDL2_patched/configure.in	2018-11-13 03:12:25.311694354 +0100
+@@ -2110,26 +2110,12 @@
+         video_directfb=no
+ 
+         DIRECTFB_REQUIRED_VERSION=1.0.0
+-        AC_PATH_PROGS(DIRECTFBCONFIG, directfb-config, no, [$prefix/bin:$PATH])
+-        if test x$DIRECTFBCONFIG = xno; then
+-            AC_PATH_PROG(PKG_CONFIG, pkg-config, no)
+-            if test x$PKG_CONFIG != xno; then
+-                if $PKG_CONFIG --atleast-pkgconfig-version 0.7 && $PKG_CONFIG --atleast-version $DIRECTFB_REQUIRED_VERSION directfb; then
+-                    DIRECTFB_CFLAGS=`$PKG_CONFIG --cflags directfb`
+-                    DIRECTFB_LIBS=`$PKG_CONFIG --libs directfb`
+-                    DIRECTFB_PREFIX=`$PKG_CONFIG --variable=prefix directfb`
+-                    video_directfb=yes
+-                fi
+-            fi
+-        else
+-            set -- `echo $DIRECTFB_REQUIRED_VERSION | sed 's/\./ /g'`
+-            NEED_VERSION=`expr $1 \* 10000 + $2 \* 100 + $3`
+-            set -- `$DIRECTFBCONFIG --version | sed 's/\./ /g'`
+-            HAVE_VERSION=`expr $1 \* 10000 + $2 \* 100 + $3`
+-            if test $HAVE_VERSION -ge $NEED_VERSION; then
+-                DIRECTFB_CFLAGS=`$DIRECTFBCONFIG --cflags`
+-                DIRECTFB_LIBS=`$DIRECTFBCONFIG --libs`
+-                DIRECTFB_PREFIX=`$DIRECTFBCONFIG --prefix`
++        AC_PATH_PROG(PKG_CONFIG, pkg-config, no)
++        if test x$PKG_CONFIG != xno; then
++            if $PKG_CONFIG --atleast-pkgconfig-version 0.7 && $PKG_CONFIG --atleast-version $DIRECTFB_REQUIRED_VERSION directfb; then
++                DIRECTFB_CFLAGS=`$PKG_CONFIG --cflags directfb`
++                DIRECTFB_LIBS=`$PKG_CONFIG --libs directfb`
++                DIRECTFB_PREFIX=`$PKG_CONFIG --variable=prefix directfb`
+                 video_directfb=yes
+             fi
+         fi
+diff -Naur SDL2-2.0.8/src/video/SDL_surface.c SDL2_patched/src/video/SDL_surface.c
+--- SDL2-2.0.8/src/video/SDL_surface.c	2018-03-01 17:34:42.000000000 +0100
++++ SDL2_patched/src/video/SDL_surface.c	2018-11-13 04:58:48.665434316 +0100
+@@ -159,6 +159,7 @@
+     /* Get the pixel format */
+     format = SDL_MasksToPixelFormatEnum(depth, Rmask, Gmask, Bmask, Amask);
+     if (format == SDL_PIXELFORMAT_UNKNOWN) {
++        printf("fail4\n");
+         SDL_SetError("Unknown pixel format");
+         return NULL;
+     }
+@@ -179,6 +180,7 @@
+ 
+     surface = SDL_CreateRGBSurface(0, 0, 0, depth, Rmask, Gmask, Bmask, Amask);
+     if (surface != NULL) {
++        printf("surface1\n");
+         surface->flags |= SDL_PREALLOC;
+         surface->pixels = pixels;
+         surface->w = width;
+diff -Naur SDL2-2.0.8/src/video/SDL_video.c SDL2_patched/src/video/SDL_video.c
+--- SDL2-2.0.8/src/video/SDL_video.c	2018-03-01 17:34:42.000000000 +0100
++++ SDL2_patched/src/video/SDL_video.c	2018-11-13 05:48:38.595250010 +0100
+@@ -172,11 +172,13 @@
+ 
+     /* If there's no native framebuffer support then there's no option */
+     if (!_this->CreateWindowFramebuffer) {
++        printf("ShouldUseTextureFramebuffer1\n");
+         return SDL_TRUE;
+     }
+ 
+     /* If this is the dummy driver there is no texture support */
+     if (_this->is_dummy) {
++        printf("ShouldUseTextureFramebuffer2\n");
+         return SDL_FALSE;
+     }
+ 
+@@ -185,15 +187,19 @@
+      */
+     hint = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
+     if (hint && SDL_strcasecmp(hint, "software") == 0) {
++        printf("ShouldUseTextureFramebuffer3\n");
+         return SDL_FALSE;
+     }
+ 
+     /* See if the user or application wants a specific behavior */
+     hint = SDL_GetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION);
+     if (hint) {
++        printf("ShouldUseTextureFramebuffer4\n");
+         if (*hint == '0' || SDL_strcasecmp(hint, "false") == 0) {
++            printf("ShouldUseTextureFramebuffer5\n");
+             return SDL_FALSE;
+         } else {
++            printf("ShouldUseTextureFramebuffer6\n");
+             return SDL_TRUE;
+         }
+     }
+@@ -260,40 +266,50 @@
+ {
+     SDL_WindowTextureData *data;
+ 
++    printf("SDL_CreateWindowTexture\n");
++
+     data = SDL_GetWindowData(window, SDL_WINDOWTEXTUREDATA);
+     if (!data) {
+         SDL_Renderer *renderer = NULL;
+         int i;
+         const char *hint = SDL_GetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION);
++        printf("1\n");
+ 
+         /* Check to see if there's a specific driver requested */
+         if (hint && *hint != '0' && *hint != '1' &&
+             SDL_strcasecmp(hint, "true") != 0 &&
+             SDL_strcasecmp(hint, "false") != 0 &&
+             SDL_strcasecmp(hint, "software") != 0) {
++            printf("2\n");
+             for (i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
+                 SDL_RendererInfo info;
+                 SDL_GetRenderDriverInfo(i, &info);
+                 if (SDL_strcasecmp(info.name, hint) == 0) {
++                    printf("3\n");
+                     renderer = SDL_CreateRenderer(window, i, 0);
+                     break;
+                 }
++                printf("4\n");
+             }
+         }
+         
+         if (!renderer) {
++            printf("5\n");
+             for (i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
+                 SDL_RendererInfo info;
+                 SDL_GetRenderDriverInfo(i, &info);
+                 if (SDL_strcmp(info.name, "software") != 0) {
++                    printf("6\n");
+                     renderer = SDL_CreateRenderer(window, i, 0);
+                     if (renderer) {
++                        printf("7\n");
+                         break;
+                     }
+                 }
+             }
+         }
+         if (!renderer) {
++            printf("8\n");
+             return SDL_SetError("No hardware accelerated renderers available");
+         }
+ 
+@@ -2198,14 +2214,17 @@
+     Uint32 Rmask, Gmask, Bmask, Amask;
+ 
+     if (!_this->CreateWindowFramebuffer || !_this->UpdateWindowFramebuffer) {
++        printf("fail1\n");
+         return NULL;
+     }
+ 
+     if (_this->CreateWindowFramebuffer(_this, window, &format, &pixels, &pitch) < 0) {
++        printf("fail2\n");
+         return NULL;
+     }
+ 
+     if (!SDL_PixelFormatEnumToMasks(format, &bpp, &Rmask, &Gmask, &Bmask, &Amask)) {
++            printf("fail3\n");
+         return NULL;
+     }
+ 

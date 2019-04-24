@@ -1,0 +1,12 @@
+[Unit]
+Description=Phone Layer1
+After=network.target sys-subsystem-net-devices-tap0.device
+Requires=sys-subsystem-net-devices-tap0.device
+
+[Service]
+Type=simple
+ExecStart=/opt/nokia/layer1
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

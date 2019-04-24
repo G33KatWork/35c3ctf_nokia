@@ -1,0 +1,16 @@
+[Unit]
+Description=Phone UI
+After=baseband.service getty.target
+Requires=baseband.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/nokia/nokia_ui
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target

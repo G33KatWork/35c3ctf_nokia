@@ -1,0 +1,150 @@
+{
+	"files":	{
+		"MF":	{
+			"file_type":	1,
+			"name":	16128,
+			"children":	{
+				"GSM":	{
+					"file_type":	2,
+					"name":	32544,
+					"children":	{
+						"IMSI":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28423,
+							"size":	9,
+							"value":	"089910070000000010",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	4,
+								"invalidate":	4,
+								"rehabilitate":	1
+							}
+						},
+						"LOCI":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28542,
+							"size":	11,
+							"value":	"02d824e509f1070018ff00",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	1,
+								"invalidate":	4,
+								"rehabilitate":	1
+							}
+						},
+						"KC":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28448,
+							"size":	9,
+							"record_ptr":	0,
+							"value":	"d704dd129272ac0001",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	1,
+								"invalidate":	4,
+								"rehabilitate":	4
+							}
+						},
+						"PLMNSEL":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28464,
+							"size":	3,
+							"record_ptr":	0,
+							"value":	"09f107",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	1,
+								"invalidate":	4,
+								"rehabilitate":	4
+							}
+						},
+						"HPPLMN":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28465,
+							"size":	1,
+							"record_ptr":	0,
+							"value":	"01",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	4,
+								"invalidate":	4,
+								"rehabilitate":	4
+							}
+						},
+						"ACC":	{
+							"file_type":	4,
+							"file_structure":	0,
+							"name":	28536,
+							"size":	2,
+							"record_ptr":	0,
+							"value":	"ffff",
+							"valid":	true,
+							"invalid_allow_rw":	false,
+							"access":	{
+								"read":	1,
+								"update":	4,
+								"invalidate":	4,
+								"rehabilitate":	4
+							}
+						}
+					}
+				},
+				"ICCID":	{
+					"file_type":	4,
+					"file_structure":	0,
+					"name":	12258,
+					"size":	10,
+					"value":	"31323334353637383930",
+					"valid":	true,
+					"invalid_allow_rw":	false,
+					"access":	{
+						"read":	0,
+						"update":	15,
+						"invalidate":	4,
+						"rehabilitate":	4
+					}
+				}
+			}
+		}
+	},
+	"chv":	{
+		"CHV1":	{
+			"value":	"1234",
+			"remaining":	3,
+			"enabled":	true,
+			"reset_remaining":	3
+		},
+		"CHV2":	{
+			"value":	"1234",
+			"remaining":	3,
+			"enabled":	true,
+			"reset_remaining":	3
+		},
+		"UNBLOCK_CHV1":	{
+			"value":	"12345678",
+			"remaining":	10,
+			"reset_remaining":	10
+		},
+		"UNBLOCK_CHV2":	{
+			"value":	"12345678",
+			"remaining":	10,
+			"reset_remaining":	10
+		}
+	},
+	"ki":	"000102030405060708090a0b0c0d0e0f"
+}
